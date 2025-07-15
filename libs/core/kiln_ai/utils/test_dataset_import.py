@@ -1,3 +1,4 @@
+import base64
 import csv
 import json
 import logging
@@ -25,6 +26,7 @@ from kiln_ai.utils.dataset_import import (
     deserialize_tags,
     format_validation_error,
     generate_import_tags,
+    image_utils,
     without_none_values,
 )
 
@@ -856,3 +858,39 @@ def test_dataset_file_importer_validates_tag_splits(base_task: Task, tmp_path):
         ),
     )
     assert importer.config.tag_splits == {"train": 0.7, "test": 0.3}
+
+
+def test_image_file_to_base64(tmp_path):
+    image_path = tmp_path / "img.bin"
+    image_bytes = b"binarydata"
+    image_path.write_bytes(image_bytes)
+
+    encoded = image_utils.image_file_to_base64(image_path)
+    assert encoded == base64.b64encode(image_bytes).decode("utf-8")
+
+
+def test_import_images(base_task: Task, tmp_path):
+    img_dir = tmp_path / "imgs"
+    img_dir.mkdir()
+
+    img1 = img_dir / "one.bin"
+    img1.write_bytes(b"one")
+    img2 = img_dir / "two.bin"
+    img2.write_bytes(b"two")
+
+    importer = DatasetFileImporter(
+        base_task,
+        ImportConfig(
+            dataset_type=DatasetImportFormat.IMAGES,
+            dataset_path=str(img_dir),
+            dataset_name="imgs",
+        ),
+    )
+
+    count = importer.create_runs_from_file()
+    assert count == 2
+    assert len(base_task.runs()) == 2
+
+    contents = {run.input for run in base_task.runs()}
+    assert base64.b64encode(b"one").decode("utf-8") in contents
+    assert base64.b64encode(b"two").decode("utf-8") in contents
