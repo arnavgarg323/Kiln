@@ -1,5 +1,6 @@
 import csv
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass
@@ -9,16 +10,16 @@ from typing import Dict, Protocol
 from pydantic import BaseModel, Field, ValidationError
 
 from kiln_ai.datamodel import DataSource, DataSourceType, Task, TaskOutput, TaskRun
+from kiln_ai.utils import image_utils
 
 logger = logging.getLogger(__name__)
 
 
 class DatasetImportFormat(str, Enum):
-    """
-    The format of the dataset to import.
-    """
+    """The format of the dataset to import."""
 
     CSV = "csv"
+    IMAGES = "images"
 
 
 @dataclass
@@ -273,8 +274,61 @@ def import_csv(
     return len(rows)
 
 
+def import_images(
+    task: Task,
+    config: ImportConfig,
+) -> int:
+    """Import a directory of images as base64 encoded inputs."""
+
+    session_id = str(int(time.time()))
+    dataset_path = config.dataset_path
+    dataset_name = config.dataset_name
+    tag_splits = config.tag_splits
+
+    rows: list[TaskRun] = []
+
+    if not os.path.isdir(dataset_path):
+        raise KilnInvalidImportFormat("Dataset path must be a directory of images")
+
+    for file_name in os.listdir(dataset_path):
+        file_path = os.path.join(dataset_path, file_name)
+        if not os.path.isfile(file_path):
+            continue
+        try:
+            encoded = image_utils.image_file_to_base64(file_path)
+        except Exception as e:  # pragma: no cover - log error and skip
+            logger.warning(f"Failed to encode {file_name}: {e}")
+            continue
+
+        run = TaskRun(
+            parent=task,
+            input=encoded,
+            input_source=DataSource(
+                type=DataSourceType.file_import,
+                properties={"file_name": file_name},
+            ),
+            output=TaskOutput(
+                output="",
+                source=DataSource(
+                    type=DataSourceType.file_import,
+                    properties={"file_name": dataset_name},
+                ),
+            ),
+            tags=generate_import_tags(session_id),
+        )
+        rows.append(run)
+
+    add_tag_splits(rows, tag_splits)
+
+    for run in rows:
+        run.save_to_file()
+
+    return len(rows)
+
+
 DATASET_IMPORTERS: Dict[DatasetImportFormat, Importer] = {
     DatasetImportFormat.CSV: import_csv,
+    DatasetImportFormat.IMAGES: import_images,
 }
 
 
